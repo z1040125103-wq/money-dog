@@ -225,8 +225,9 @@ const App: React.FC = () => {
     setAppState({ ...appState, app_settings: newSettings });
   };
 
-  const updateUserData = (userId: number, userData: Partial<User>) => {
-    // 深拷贝确保 UI 刷新
+  const updateUserData = (_userId: number, userData: Partial<User>) => {
+    // We don't need userId here as we always operate on the single active user logic in this version
+    // Renamed to _userId to suppress unused variable warning
     const newUser = { ...user, ...userData };
     setAppState({ ...appState, users: [newUser] });
   };
