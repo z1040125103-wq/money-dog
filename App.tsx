@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { loadState, saveState } from './services/storageService';
+import { supabase, isSupabaseConfigured } from './supabaseClient';
+import { loadState, saveState, saveToCloud, loadFromCloud } from './services/storageService';
 import { AppState, Transaction, User, Dream, TransactionCategory, CustomAccount } from './types';
 import { AccountCard } from './components/AccountCard';
 import { FinancialTools } from './components/FinancialTools';
@@ -11,10 +12,16 @@ import { PocketDetail } from './components/PocketDetail';
 import { AuthScreen } from './components/AuthScreen';
 import { AddAccountModal } from './components/AddAccountModal';
 import { GooseIcon } from './components/Icons';
-import { Settings, PlusCircle, Wallet, Target, History, PiggyBank, LogOut, Plus, Landmark, TrendingUp, CircleDollarSign, GraduationCap } from 'lucide-react';
+import { Settings, PlusCircle, Wallet, Target, History, PiggyBank, LogOut, Plus, Landmark, TrendingUp, CircleDollarSign, GraduationCap, Loader2, Cloud, CloudOff } from 'lucide-react';
 
 const App: React.FC = () => {
+  const [session, setSession] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
+  
+  // Initialize with local state first for fast render
   const [appState, setAppState] = useState<AppState>(loadState());
+  
   const [isTransactionModalOpen, setTransactionModalOpen] = useState(false);
   const [isAdminOpen, setAdminOpen] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
@@ -28,63 +35,116 @@ const App: React.FC = () => {
   // State for editing custom accounts
   const [editingAccount, setEditingAccount] = useState<CustomAccount | null>(null);
 
-  // Persist state changes
+  // 1. Check Supabase Session & Load Data
   useEffect(() => {
+    // If NO Supabase config, skip auth entirely and run in offline mode
+    if (!isSupabaseConfigured) {
+      console.log("App running in Offline Mode");
+      setIsLoading(false);
+      return;
+    }
+
+    // Check active session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) {
+        fetchCloudData(session.user.id, session.user.email);
+      } else {
+        setIsLoading(false);
+      }
+    });
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) {
+        setIsLoading(true); 
+        fetchCloudData(session.user.id, session.user.email);
+      } else {
+        setIsLoading(false);
+        // Reset to default/local state on logout
+        setAppState(loadState()); 
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const fetchCloudData = async (userId: string, userEmail?: string) => {
+    setIsSyncing(true);
+    const cloudData = await loadFromCloud(userId);
+    
+    if (cloudData) {
+      // 1. If data exists in cloud, use it
+      console.log("Loaded data from cloud");
+      setAppState(cloudData);
+      saveState(cloudData); // Sync to local storage
+    } else {
+      // 2. If NO data in cloud (New User), init with current default state
+      console.log("New user detected, initializing cloud data...");
+      
+      // Update the default user name to the email address
+      const newState = { ...appState };
+      if (newState.users.length > 0 && userEmail) {
+          newState.users[0].name = userEmail.split('@')[0];
+      }
+      
+      setAppState(newState);
+      await saveToCloud(userId, newState);
+    }
+    
+    setIsLoading(false);
+    setIsSyncing(false);
+  };
+
+  // 2. Persist state changes to Local AND Cloud
+  useEffect(() => {
+    // Save locally
     saveState(appState);
-  }, [appState]);
+    
+    // Save to cloud
+    if (session?.user?.id && isSupabaseConfigured && !isLoading) {
+       saveToCloud(session.user.id, appState);
+    }
+  }, [appState, session, isLoading]);
 
-  // Handle Login/Register/Recovery
-  const handleLogin = (userId: number) => {
-    setAppState(prev => ({ ...prev, activeUserId: userId }));
+
+  const handleLogout = async () => {
+    if (isSupabaseConfigured) {
+        await supabase.auth.signOut();
+        setSession(null);
+    }
   };
 
-  const handleRegister = (name: string, password: string, securityQuestion: string, securityAnswer: string) => {
-    const newUser: User = {
-      id: Date.now(),
-      name,
-      password,
-      securityQuestion,
-      securityAnswer,
-      assets: {
-        goose_balance: 0,
-        pocket_balance: 0,
-        dreams: [],
-        custom_accounts: []
-      },
+  // --- LOGIC HELPERS ---
+  
+  // User Logic:
+  // If Cloud/Auth mode: use the first user in the array (synced one).
+  // If Offline mode: use the first user in the array (local default).
+  const user: User = appState.users[0] || {
+      id: 0, 
+      name: session?.user?.email?.split('@')[0] || "我的账本", 
+      password: "", 
+      assets: { goose_balance: 0, pocket_balance: 0, dreams: [], custom_accounts: [] }, 
       transactions: []
-    };
-    setAppState(prev => ({
-      ...prev,
-      users: [...prev.users, newUser],
-      activeUserId: newUser.id
-    }));
   };
 
-  // Handle Password Reset
-  const handlePasswordReset = (userId: number, newPassword: string) => {
-    const newUsers = appState.users.map(u => 
-      u.id === userId ? { ...u, password: newPassword } : u
-    );
-    setAppState(prev => ({ ...prev, users: newUsers }));
-    // Optional: auto login or stay on login screen. Let's stay on login screen to let user try new password.
-  };
-
-  const handleLogout = () => {
-    setAppState(prev => ({ ...prev, activeUserId: 0 })); // 0 means no active user
-  };
-
-  const userIndex = appState.users.findIndex(u => u.id === appState.activeUserId);
-  const user = appState.users[userIndex !== -1 ? userIndex : -1];
-
-  if (!user) {
+  // If loading and no session yet, show loader
+  if (isLoading) {
     return (
-      <AuthScreen 
-        users={appState.users} 
-        onLogin={handleLogin} 
-        onRegister={handleRegister} 
-        onResetPassword={handlePasswordReset}
-      />
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="text-center">
+            <Loader2 className="animate-spin text-indigo-600 mx-auto mb-4" size={40} />
+            <p className="text-slate-500 font-bold">正在连接金鹅星球...</p>
+        </div>
+      </div>
     );
+  }
+
+  // If Configured AND Not logged in -> Show Auth Screen
+  // If Not Configured -> Skip Auth Screen (Offline Mode)
+  if (isSupabaseConfigured && !session) {
+    return <AuthScreen />;
   }
 
   const { assets } = user;
@@ -104,11 +164,13 @@ const App: React.FC = () => {
     type: 'deposit' | 'withdraw', 
     amount: number, 
     note: string, 
-    category: TransactionCategory,
+    category: TransactionCategory, 
     distribution?: { dream: number; goose: number; pocket: number }, 
     source?: string
   ) => {
-    const newUser = { ...user };
+    // 关键修复：使用深拷贝 (Deep Copy) 防止 React 状态更新不生效
+    const newUser = JSON.parse(JSON.stringify(user));
+    
     const newTx: Transaction = {
       id: Date.now().toString(),
       date: new Date().toISOString(),
@@ -121,9 +183,23 @@ const App: React.FC = () => {
     };
 
     if (type === 'deposit' && distribution) {
-      if (newUser.assets.dreams.length > 0) {
-        newUser.assets.dreams[0].current_amount += distribution.dream;
+      // 关键修复：处理梦想账户
+      if (distribution.dream > 0) {
+          if (newUser.assets.dreams.length > 0) {
+             // 正常情况：存入第一个梦想
+             newUser.assets.dreams[0].current_amount += distribution.dream;
+          } else {
+             // 异常情况修复：如果没有梦想，自动创建一个，防止钱消失
+             const defaultDream: Dream = {
+                 id: Date.now(),
+                 title: "我的梦想基金",
+                 target_amount: 10000, // 默认目标
+                 current_amount: distribution.dream
+             };
+             newUser.assets.dreams.push(defaultDream);
+          }
       }
+
       newUser.assets.goose_balance += distribution.goose;
       newUser.assets.pocket_balance += distribution.pocket;
       
@@ -140,9 +216,8 @@ const App: React.FC = () => {
 
     newUser.transactions.unshift(newTx);
     
-    // Update State
-    const newUsers = [...appState.users];
-    newUsers[userIndex] = newUser;
+    // Update State (User array is kept for structure, but we only use index 0)
+    const newUsers = [newUser]; 
     setAppState({ ...appState, users: newUsers });
   };
 
@@ -151,33 +226,28 @@ const App: React.FC = () => {
   };
 
   const updateUserData = (userId: number, userData: Partial<User>) => {
-    const newUsers = appState.users.map(u => 
-        u.id === userId ? { ...u, ...userData } : u
-    );
-    setAppState({ ...appState, users: newUsers });
+    // 深拷贝确保 UI 刷新
+    const newUser = { ...user, ...userData };
+    setAppState({ ...appState, users: [newUser] });
   };
 
   // Dream Management Handlers
   const handleAddDream = (dream: Omit<Dream, 'id'>) => {
       const newDreamObj: Dream = { ...dream, id: Date.now(), current_amount: 0 };
-      const newUser = { 
-        ...user,
-        assets: {
-          ...user.assets,
-          dreams: [...user.assets.dreams, newDreamObj]
-        }
-      };
+      const newUser = JSON.parse(JSON.stringify(user));
+      newUser.assets.dreams.push(newDreamObj);
+      updateUserData(user.id, newUser);
+  };
+
+  const handleUpdateDream = (updatedDream: Dream) => {
+      const newUser = JSON.parse(JSON.stringify(user));
+      newUser.assets.dreams = newUser.assets.dreams.map((d: Dream) => d.id === updatedDream.id ? updatedDream : d);
       updateUserData(user.id, newUser);
   };
 
   const handleDeleteDream = (id: number) => {
-      const newUser = { 
-        ...user,
-        assets: {
-          ...user.assets,
-          dreams: user.assets.dreams.filter(d => d.id !== id)
-        }
-      };
+      const newUser = JSON.parse(JSON.stringify(user));
+      newUser.assets.dreams = newUser.assets.dreams.filter((d: Dream) => d.id !== id);
       updateUserData(user.id, newUser);
   };
 
@@ -245,10 +315,19 @@ const App: React.FC = () => {
       <header className="bg-white shadow-sm sticky top-0 z-30">
         <div className="max-w-5xl mx-auto px-4 py-4 flex justify-between items-center">
           <div className="flex items-center gap-2">
-            <div className="bg-indigo-600 p-2 rounded-lg text-white">
+            <div className={`p-2 rounded-lg text-white ${isSupabaseConfigured ? 'bg-indigo-600' : 'bg-slate-600'}`}>
                <Wallet size={24} />
             </div>
             <h1 className="text-xl font-extrabold text-slate-800 tracking-tight">小狗钱钱</h1>
+            
+            {/* Status Indicator */}
+            {isSupabaseConfigured ? (
+                isSyncing ? 
+                    <span className="text-xs text-slate-400 flex items-center gap-1 animate-pulse"><Cloud size={12}/> 同步中</span> : 
+                    <span className="text-xs text-green-500 flex items-center gap-1"><Cloud size={12}/> 已同步</span>
+            ) : (
+                <span className="text-xs text-slate-400 flex items-center gap-1 bg-slate-100 px-2 py-1 rounded-full"><CloudOff size={12}/> 离线模式</span>
+            )}
           </div>
           <div className="flex items-center gap-4">
              <div className="hidden md:block text-right">
@@ -266,13 +345,15 @@ const App: React.FC = () => {
                 >
                   <Settings size={20} />
                 </button>
-                <button 
-                  onClick={handleLogout}
-                  className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
-                  title="退出登录"
-                >
-                  <LogOut size={20} />
-                </button>
+                {isSupabaseConfigured && (
+                    <button 
+                    onClick={handleLogout}
+                    className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
+                    title="退出登录"
+                    >
+                    <LogOut size={20} />
+                    </button>
+                )}
              </div>
           </div>
         </div>
@@ -424,6 +505,7 @@ const App: React.FC = () => {
         dreams={assets.dreams}
         totalDreamBalance={totalDreamBalance}
         onAddDream={handleAddDream}
+        onUpdateDream={handleUpdateDream}
         onDeleteDream={handleDeleteDream}
       />
 
