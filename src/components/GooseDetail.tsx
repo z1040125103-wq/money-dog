@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, TrendingUp, Calendar, History, Clock } from 'lucide-react';
+import { X, TrendingUp, Clock } from 'lucide-react';
 import { GooseIcon } from './Icons';
 
 interface GooseDetailProps {
