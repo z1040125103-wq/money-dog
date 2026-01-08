@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { loadState, saveState, saveToCloud, loadFromCloud } from './services/storageService';
+import { loadState, saveState } from './services/storageService';
 import { AppState, Transaction, User, Dream, TransactionCategory, CustomAccount } from './types';
 import { AccountCard } from './components/AccountCard';
 import { FinancialTools } from './components/FinancialTools';
@@ -12,16 +11,10 @@ import { PocketDetail } from './components/PocketDetail';
 import { AuthScreen } from './components/AuthScreen';
 import { AddAccountModal } from './components/AddAccountModal';
 import { GooseIcon } from './components/Icons';
-import { Settings, PlusCircle, Wallet, Target, History, PiggyBank, LogOut, Plus, Landmark, TrendingUp, CircleDollarSign, GraduationCap, Loader2, Cloud, Database, Key } from 'lucide-react';
+import { Settings, PlusCircle, Wallet, Target, History, PiggyBank, LogOut, Plus, Landmark, TrendingUp, CircleDollarSign, GraduationCap } from 'lucide-react';
 
 const App: React.FC = () => {
-  const [session, setSession] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSyncing, setIsSyncing] = useState(false);
-  
-  // Initialize with local state first for fast render
   const [appState, setAppState] = useState<AppState>(loadState());
-  
   const [isTransactionModalOpen, setTransactionModalOpen] = useState(false);
   const [isAdminOpen, setAdminOpen] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
@@ -35,156 +28,63 @@ const App: React.FC = () => {
   // State for editing custom accounts
   const [editingAccount, setEditingAccount] = useState<CustomAccount | null>(null);
 
-  // 1. Check Supabase Session & Load Data
+  // Persist state changes
   useEffect(() => {
-    if (!isSupabaseConfigured) {
-      setIsLoading(false);
-      return;
-    }
-
-    // Check active session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session) {
-        fetchCloudData(session.user.id, session.user.email);
-      } else {
-        setIsLoading(false);
-      }
-    });
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session) {
-        setIsLoading(true); 
-        fetchCloudData(session.user.id, session.user.email);
-      } else {
-        setIsLoading(false);
-        // Reset to default/local state on logout
-        setAppState(loadState()); 
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
-  const fetchCloudData = async (userId: string, userEmail?: string) => {
-    setIsSyncing(true);
-    const cloudData = await loadFromCloud(userId);
-    
-    if (cloudData) {
-      // 1. If data exists in cloud, use it
-      console.log("Loaded data from cloud");
-      setAppState(cloudData);
-      saveState(cloudData); // Sync to local storage
-    } else {
-      // 2. If NO data in cloud (New User), init with current default state
-      console.log("New user detected, initializing cloud data...");
-      
-      // Update the default user name to the email address
-      const newState = { ...appState };
-      if (newState.users.length > 0 && userEmail) {
-          newState.users[0].name = userEmail.split('@')[0];
-      }
-      
-      setAppState(newState);
-      await saveToCloud(userId, newState);
-    }
-    
-    setIsLoading(false);
-    setIsSyncing(false);
-  };
-
-  // 2. Persist state changes to Local AND Cloud
-  useEffect(() => {
-    // Save locally
     saveState(appState);
-    
-    // Save to cloud
-    if (session?.user?.id && isSupabaseConfigured && !isLoading) {
-       saveToCloud(session.user.id, appState);
-    }
-  }, [appState, session, isLoading]);
+  }, [appState]);
 
-
-  const handleLogout = async () => {
-    if (isSupabaseConfigured) {
-        await supabase.auth.signOut();
-        setSession(null);
-    }
+  // Handle Login/Register/Recovery
+  const handleLogin = (userId: number) => {
+    setAppState(prev => ({ ...prev, activeUserId: userId }));
   };
 
-  // --- CONFIGURATION CHECK ---
-  if (!isSupabaseConfigured) {
-      return (
-          <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white">
-              <div className="bg-slate-800 p-8 rounded-3xl max-w-lg w-full shadow-2xl border border-slate-700">
-                  <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center mb-6 shadow-lg shadow-indigo-500/30">
-                      <Database size={32} />
-                  </div>
-                  <h1 className="text-2xl font-bold mb-2">连接云端数据库</h1>
-                  <p className="text-slate-400 mb-6">
-                      为了开启云端同步功能，请配置 Supabase 环境变量。
-                  </p>
-                  
-                  <div className="space-y-4">
-                      <div className="bg-slate-900 p-4 rounded-xl border border-slate-700">
-                          <div className="flex items-center gap-2 text-sm font-bold text-indigo-400 mb-2">
-                              <Cloud size={16}/> 第一步：创建 .env 文件
-                          </div>
-                          <p className="text-xs text-slate-500 mb-2">在项目根目录创建一个名为 <code className="bg-slate-800 px-1 py-0.5 rounded text-slate-300">.env</code> 的文件。</p>
-                      </div>
-
-                      <div className="bg-slate-900 p-4 rounded-xl border border-slate-700">
-                          <div className="flex items-center gap-2 text-sm font-bold text-indigo-400 mb-2">
-                              <Key size={16}/> 第二步：填入密钥
-                          </div>
-                          <p className="text-xs text-slate-500 mb-3">将以下内容复制到 .env 文件中：</p>
-                          
-                          <div className="bg-black/50 p-3 rounded-lg overflow-x-auto">
-                              <pre className="text-[10px] text-green-400 font-mono">
-{`VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your-anon-key`}
-                              </pre>
-                          </div>
-                          <p className="text-[10px] text-slate-500 mt-2">
-                              * 请在 Supabase 控制台的 Project Settings -&gt; API 中找到 <span className="text-white">anon public</span> key。
-                          </p>
-                      </div>
-                  </div>
-              </div>
-          </div>
-      );
-  }
-
-  // --- LOGIC HELPERS ---
-  
-  // User Management Logic:
-  // In Cloud mode, we treat the 'users' array as having just one active user (the one logged in).
-  // We use index 0 as the source of truth.
-  const user: User = appState.users[0] || {
-      id: 0, 
-      name: session?.user?.email?.split('@')[0] || "我的账本", 
-      password: "", 
-      assets: { goose_balance: 0, pocket_balance: 0, dreams: [], custom_accounts: [] }, 
+  const handleRegister = (name: string, password: string, securityQuestion: string, securityAnswer: string) => {
+    const newUser: User = {
+      id: Date.now(),
+      name,
+      password,
+      securityQuestion,
+      securityAnswer,
+      assets: {
+        goose_balance: 0,
+        pocket_balance: 0,
+        dreams: [],
+        custom_accounts: []
+      },
       transactions: []
+    };
+    setAppState(prev => ({
+      ...prev,
+      users: [...prev.users, newUser],
+      activeUserId: newUser.id
+    }));
   };
 
-  // If loading and no session yet, show loader
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
-        <div className="text-center">
-            <Loader2 className="animate-spin text-indigo-600 mx-auto mb-4" size={40} />
-            <p className="text-slate-500 font-bold">正在连接金鹅星球...</p>
-        </div>
-      </div>
+  // Handle Password Reset
+  const handlePasswordReset = (userId: number, newPassword: string) => {
+    const newUsers = appState.users.map(u => 
+      u.id === userId ? { ...u, password: newPassword } : u
     );
-  }
+    setAppState(prev => ({ ...prev, users: newUsers }));
+    // Optional: auto login or stay on login screen. Let's stay on login screen to let user try new password.
+  };
 
-  // If not logged in, show Auth
-  if (!session) {
-    return <AuthScreen />;
+  const handleLogout = () => {
+    setAppState(prev => ({ ...prev, activeUserId: 0 })); // 0 means no active user
+  };
+
+  const userIndex = appState.users.findIndex(u => u.id === appState.activeUserId);
+  const user = appState.users[userIndex !== -1 ? userIndex : -1];
+
+  if (!user) {
+    return (
+      <AuthScreen 
+        users={appState.users} 
+        onLogin={handleLogin} 
+        onRegister={handleRegister} 
+        onResetPassword={handlePasswordReset}
+      />
+    );
   }
 
   const { assets } = user;
@@ -204,7 +104,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key`}
     type: 'deposit' | 'withdraw', 
     amount: number, 
     note: string, 
-    category: TransactionCategory, 
+    category: TransactionCategory,
     distribution?: { dream: number; goose: number; pocket: number }, 
     source?: string
   ) => {
@@ -240,8 +140,9 @@ VITE_SUPABASE_ANON_KEY=your-anon-key`}
 
     newUser.transactions.unshift(newTx);
     
-    // Update State (User array is kept for structure, but we only use index 0)
-    const newUsers = [newUser]; 
+    // Update State
+    const newUsers = [...appState.users];
+    newUsers[userIndex] = newUser;
     setAppState({ ...appState, users: newUsers });
   };
 
@@ -250,8 +151,10 @@ VITE_SUPABASE_ANON_KEY=your-anon-key`}
   };
 
   const updateUserData = (userId: number, userData: Partial<User>) => {
-    const newUser = { ...user, ...userData };
-    setAppState({ ...appState, users: [newUser] });
+    const newUsers = appState.users.map(u => 
+        u.id === userId ? { ...u, ...userData } : u
+    );
+    setAppState({ ...appState, users: newUsers });
   };
 
   // Dream Management Handlers
@@ -262,17 +165,6 @@ VITE_SUPABASE_ANON_KEY=your-anon-key`}
         assets: {
           ...user.assets,
           dreams: [...user.assets.dreams, newDreamObj]
-        }
-      };
-      updateUserData(user.id, newUser);
-  };
-
-  const handleUpdateDream = (updatedDream: Dream) => {
-      const newUser = { 
-        ...user,
-        assets: {
-          ...user.assets,
-          dreams: user.assets.dreams.map(d => d.id === updatedDream.id ? updatedDream : d)
         }
       };
       updateUserData(user.id, newUser);
@@ -357,10 +249,6 @@ VITE_SUPABASE_ANON_KEY=your-anon-key`}
                <Wallet size={24} />
             </div>
             <h1 className="text-xl font-extrabold text-slate-800 tracking-tight">小狗钱钱</h1>
-            {isSyncing ? 
-                <span className="text-xs text-slate-400 flex items-center gap-1 animate-pulse"><Cloud size={12}/> 同步中</span> : 
-                <span className="text-xs text-green-500 flex items-center gap-1"><Cloud size={12}/> 已同步</span>
-            }
           </div>
           <div className="flex items-center gap-4">
              <div className="hidden md:block text-right">
@@ -396,7 +284,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key`}
         {/* Welcome Message */}
         <div className="md:flex justify-between items-end">
              <div>
-                <h2 className="text-2xl font-bold text-slate-800">你好，{user.name.split('@')[0]}！ 👋</h2>
+                <h2 className="text-2xl font-bold text-slate-800">你好，{user.name}！ 👋</h2>
                 <p className="text-slate-500 font-medium">
                     永远不要杀死一直会下蛋的鹅。
                 </p>
@@ -536,7 +424,6 @@ VITE_SUPABASE_ANON_KEY=your-anon-key`}
         dreams={assets.dreams}
         totalDreamBalance={totalDreamBalance}
         onAddDream={handleAddDream}
-        onUpdateDream={handleUpdateDream}
         onDeleteDream={handleDeleteDream}
       />
 

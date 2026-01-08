@@ -1,11 +1,25 @@
-import { AppState } from '../types';
+import { AppState, User } from '../types';
+import { supabase } from '../supabaseClient';
 
-const STORAGE_KEY = 'money_dog_app_data_v6'; // Incremented version for auth security
+const STORAGE_KEY = 'money_dog_app_data_v7'; // Updated version
+
+const DEFAULT_USER: User = {
+  id: 0, 
+  name: "我的账本",
+  password: "",
+  assets: {
+    goose_balance: 0,
+    pocket_balance: 0,
+    dreams: [],
+    custom_accounts: []
+  },
+  transactions: []
+};
 
 const DEFAULT_STATE: AppState = {
   app_settings: {
-    admin_password: "", // Empty by default
-    admin_initialized: false, // User must set it up first
+    admin_password: "", 
+    admin_initialized: false,
     default_allocation: {
       dream: 0.5,
       goose: 0.3,
@@ -13,39 +27,11 @@ const DEFAULT_STATE: AppState = {
     },
     assumed_interest_rate: 0.08
   },
-  users: [
-    {
-      id: 1,
-      name: "我是账本",
-      password: "123456", // Default password for the demo user
-      securityQuestion: "你的第一只宠物名字是？",
-      securityAnswer: "旺财",
-      assets: {
-        goose_balance: 0,
-        pocket_balance: 0,
-        dreams: [
-          {
-            id: 101,
-            title: "乐高城堡",
-            target_amount: 2000,
-            current_amount: 0,
-            image_url: "https://picsum.photos/400/200"
-          },
-          {
-            id: 102,
-            title: "迪士尼乐园门票",
-            target_amount: 800,
-            current_amount: 0
-          }
-        ],
-        custom_accounts: []
-      },
-      transactions: []
-    }
-  ],
+  users: [DEFAULT_USER],
   activeUserId: 0
 };
 
+// 本地加载（用于离线兜底或快速渲染）
 export const loadState = (): AppState => {
   try {
     const serializedState = localStorage.getItem(STORAGE_KEY);
@@ -53,33 +39,67 @@ export const loadState = (): AppState => {
       return DEFAULT_STATE;
     }
     const state = JSON.parse(serializedState);
-    
-    // Backward compatibility: ensure custom_accounts exists
-    state.users = state.users.map((u: any) => ({
-        ...u,
-        assets: {
-            ...u.assets,
-            custom_accounts: u.assets.custom_accounts || []
-        }
-    }));
-
-    // Backward compatibility check for admin_initialized
-    if (state.app_settings && typeof state.app_settings.admin_initialized === 'undefined') {
-        state.app_settings.admin_initialized = true; 
-        state.app_settings.admin_password = state.app_settings.admin_password || "123456";
-    }
     return state;
   } catch (err) {
-    console.error("Could not load state", err);
+    console.error("Could not load local state", err);
     return DEFAULT_STATE;
   }
 };
 
+// 本地保存
 export const saveState = (state: AppState): void => {
   try {
     const serializedState = JSON.stringify(state);
     localStorage.setItem(STORAGE_KEY, serializedState);
   } catch (err) {
-    console.error("Could not save state", err);
+    console.error("Could not save local state", err);
+  }
+};
+
+// --- 云端同步功能 ---
+
+// 从 Supabase 加载数据
+export const loadFromCloud = async (userId: string): Promise<AppState | null> => {
+  try {
+    const { data, error } = await supabase
+      .from('user_progress')
+      .select('data')
+      .eq('id', userId)
+      .maybeSingle(); // 使用 maybeSingle 而不是 single，这样找不到数据时不会报错，而是返回 null
+
+    if (error) {
+      console.error("Error loading from cloud:", error);
+      return null;
+    }
+
+    if (data && data.data) {
+       return data.data as AppState;
+    }
+    
+    // 如果没有数据（data 为 null），说明是新用户
+    return null;
+
+  } catch (error) {
+    console.error("Cloud load exception:", error);
+    return null;
+  }
+};
+
+// 保存到 Supabase
+export const saveToCloud = async (userId: string, state: AppState) => {
+  try {
+    const { error } = await supabase
+      .from('user_progress')
+      .upsert({ 
+        id: userId, 
+        data: state,
+        updated_at: new Date().toISOString()
+      });
+
+    if (error) {
+      console.error("Error saving to cloud:", error);
+    }
+  } catch (error) {
+    console.error("Cloud save exception:", error);
   }
 };
