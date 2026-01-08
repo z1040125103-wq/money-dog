@@ -1,5 +1,5 @@
 import React from 'react';
-import { LucideIcon, ChevronRight } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 
 interface AccountCardProps {
   title: string;
