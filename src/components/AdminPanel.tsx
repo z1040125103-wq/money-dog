@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AppState, User } from '../types';
-import { Save, RefreshCw, X, ShieldAlert, Banknote, Lock, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Save, RefreshCw, X, ShieldAlert, Banknote, Lock, AlertTriangle } from 'lucide-react';
 
 interface AdminPanelProps {
   isOpen: boolean;
